@@ -1,0 +1,7 @@
+# Python junk
+__pycache__/
+*.pyc
+
+# Arduino junk
+build/
+libraries/
