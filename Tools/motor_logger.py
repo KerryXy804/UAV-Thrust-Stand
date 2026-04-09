@@ -3,6 +3,7 @@ import serial.tools.list_ports
 import time
 import csv
 import threading
+import os
 import tkinter as tk
 from tkinter import ttk, messagebox
 from datetime import datetime
@@ -24,7 +25,7 @@ PROGRAMS = {
 class MotorLabGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("RPI DBF - Propulsion Test Hub (v2.5)")
+        self.root.title("RPI DBF - Propulsion Test Hub (v2.6)")
         self.root.geometry("1400x950")
         self.root.configure(bg="#1e272e")
 
@@ -34,7 +35,6 @@ class MotorLabGUI:
         self.test_active = False
         self.counting_down = False
 
-        # --- Latest data (always the most recent frame, not a queue) ---
         self.latest = None
         self.latest_lock = threading.Lock()
 
@@ -48,7 +48,7 @@ class MotorLabGUI:
         self.find_serial()
 
     def setup_ui(self):
-        # --- SIDEBAR ---
+        # --- LEFT SIDEBAR ---
         self.sidebar = tk.Frame(self.root, bg="#2f3640", width=350)
         self.sidebar.pack(side="left", fill="y", padx=5, pady=5)
 
@@ -60,7 +60,7 @@ class MotorLabGUI:
         self.thrust_lbl.pack()
 
         self.torque_lbl = tk.Label(self.sidebar, text="0.000 Nm",
-                                   font=("Arial", 22, "bold"), bg="#2f3640", fg="#00a8ff")
+                                   font=("Arial", 18, "bold"), bg="#2f3640", fg="#00a8ff")
         self.torque_lbl.pack()
 
         self.rpm_lbl = tk.Label(self.sidebar, text="0 RPM",
@@ -73,36 +73,24 @@ class MotorLabGUI:
 
         # THROTTLE SLIDER
         man_frame = tk.LabelFrame(self.sidebar, text=" Throttle Control ",
-                                  bg="#2f3640", fg="white", padx=10, pady=10)
+                                  bg="#2f3640", fg="white", padx=10, pady=5)
         man_frame.pack(fill="x", padx=10, pady=5)
         self.throt_val = tk.IntVar(value=0)
-        self.slider = tk.Scale(man_frame, from_=100, to=0, orient="vertical", length=180,
+        self.slider = tk.Scale(man_frame, from_=100, to=0, orient="vertical", length=150,
                                variable=self.throt_val, command=self.update_manual_throttle,
                                bg="#34495e", fg="white", highlightthickness=0, troughcolor="#2c3e50")
         self.slider.pack(side="left", padx=20)
 
         # BUS DIAGNOSTICS
-        diag_f = tk.LabelFrame(self.sidebar, text=" Power & Load Cell Raw ",
-                               bg="#2f3640", fg="white")
+        diag_f = tk.LabelFrame(self.sidebar, text=" Diagnostics ", bg="#2f3640", fg="white")
         diag_f.pack(fill="x", padx=10, pady=5)
-        self.pwr_raw  = tk.Label(diag_f, text="0.0V | 0.0A | 0.0W",
-                                 bg="#2f3640", fg="#bdc3c7", font=("Courier", 10))
+        self.pwr_raw  = tk.Label(diag_f, text="0.0V | 0.0A | 0.0W", bg="#2f3640", fg="#bdc3c7", font=("Courier", 10))
         self.pwr_raw.pack(anchor="w", padx=10)
-        self.push_raw = tk.Label(diag_f, text="Push Raw: 0.00g",
-                                 bg="#2f3640", fg="#bdc3c7", font=("Courier", 10))
-        self.push_raw.pack(anchor="w", padx=10)
-        self.pull_raw = tk.Label(diag_f, text="Pull Raw: 0.00g",
-                                 bg="#2f3640", fg="#bdc3c7", font=("Courier", 10))
-        self.pull_raw.pack(anchor="w", padx=10)
-
-        # Latency indicator
-        self.latency_lbl = tk.Label(diag_f, text="Buffer: 0 frames",
-                                    bg="#2f3640", fg="#7f8c8d", font=("Courier", 9))
+        self.latency_lbl = tk.Label(diag_f, text="Buffer: 0 frames", bg="#2f3640", fg="#7f8c8d", font=("Courier", 9))
         self.latency_lbl.pack(anchor="w", padx=10)
 
         # AUTOMATED TEST
-        prog_f = tk.LabelFrame(self.sidebar, text=" Automated Program ",
-                               bg="#2f3640", fg="white")
+        prog_f = tk.LabelFrame(self.sidebar, text=" Automated Program ", bg="#2f3640", fg="white")
         prog_f.pack(fill="x", padx=10, pady=5)
         self.file_ent = tk.Entry(prog_f)
         self.file_ent.insert(0, "DBF_Test_Run")
@@ -114,11 +102,25 @@ class MotorLabGUI:
                                    bg="#e67e22", fg="white", font=("Arial", 10, "bold"))
         self.start_btn.pack(fill="x", pady=10, padx=10)
 
-        # SYSTEM
-        sys_f = tk.LabelFrame(self.sidebar, text=" Commands ", bg="#2f3640", fg="white")
+        # SYSTEM & METADATA
+        sys_f = tk.LabelFrame(self.sidebar, text=" Config & Hardware ", bg="#2f3640", fg="white")
         sys_f.pack(fill="x", padx=10, pady=5)
-        tk.Button(sys_f, text="TARE (ZERO)", command=self.send_zero,
-                  bg="#7f8c8d", fg="white").pack(fill="x", pady=2, padx=5)
+        
+        tk.Button(sys_f, text="TARE (ZERO)", command=self.send_zero, bg="#7f8c8d", fg="white").pack(fill="x", pady=5, padx=5)
+
+        def make_meta_entry(label_text, default_val):
+            frame = tk.Frame(sys_f, bg="#2f3640")
+            frame.pack(fill="x", padx=5, pady=2)
+            tk.Label(frame, text=label_text, bg="#2f3640", fg="#bdc3c7", font=("Arial", 8)).pack(anchor="w")
+            ent = tk.Entry(frame, bg="#34495e", fg="white", insertbackground="white", borderwidth=0)
+            ent.insert(0, default_val)
+            ent.pack(fill="x")
+            return ent
+
+        self.prop_ent = make_meta_entry("Prop Size:", "10x4.5")
+        self.batt_ent = make_meta_entry("Battery ID:", "Pack_01")
+        self.temp_ent = make_meta_entry("Temp (°C):", "20")
+        self.humi_ent = make_meta_entry("Humidity (%):", "50")
 
         tk.Button(self.sidebar, text="KILL MOTOR (K)", command=self.emergency_stop,
                   bg="#c0392b", fg="white", font=("Arial", 14, "bold"), height=2).pack(
@@ -130,10 +132,8 @@ class MotorLabGUI:
         self.setup_graphs()
 
     def setup_graphs(self):
-        self.fig, (self.ax_p, self.ax_f, self.ax_qp, self.ax_ql) = plt.subplots(
-            4, 1, figsize=(6, 10), facecolor='#1e272e')
-        self.fig.tight_layout(pad=4.0)
-
+        self.fig, (self.ax_p, self.ax_f, self.ax_qp, self.ax_ql) = plt.subplots(4, 1, figsize=(6, 10), facecolor='#1e272e')
+        self.fig.tight_layout(pad=3.0)
         self.ln_p,  = self.ax_p.plot([], [], color="#f1c40f", label="Throttle %")
         self.ln_f,  = self.ax_f.plot([], [], color="#4cd137", label="Thrust (g)")
         self.ln_qp, = self.ax_qp.plot([], [], color="#e74c3c", label="Torque Push (Nm)")
@@ -145,131 +145,67 @@ class MotorLabGUI:
             ax.grid(color='#7f8c8d', linestyle='--', alpha=0.1)
             ax.legend(loc="upper right", fontsize=7)
 
-        self.ax_qp.axhline(0, color='white', linewidth=0.5, alpha=0.5)
-        self.ax_ql.axhline(0, color='white', linewidth=0.5, alpha=0.5)
-
         self.canvas = FigureCanvasTkAgg(self.fig, master=self.plot_panel)
         self.canvas.get_tk_widget().pack(fill="both", expand=True)
 
     def read_thread(self):
-        """
-        Reads serial as fast as possible and always keeps only the
-        LATEST frame. Includes a safety voltage cutoff.
-        """
         VOLTAGE_CUTOFF = 26.4
-        
         while self.running:
-            if not self.ser:
-                time.sleep(0.05)
+            if not self.ser or not self.ser.is_open:
+                time.sleep(0.1)
                 continue
             try:
                 line = None
                 frames_this_cycle = 0
-
-                while self.ser.in_waiting > 0:
+                while self.ser.in_waiting > 0 and self.running:
                     candidate = self.ser.readline().decode('utf-8', errors='ignore').strip()
                     if candidate and ',' in candidate:
                         line = candidate
                         frames_this_cycle += 1
 
-                if line is None:
-                    candidate = self.ser.readline().decode('utf-8', errors='ignore').strip()
-                    if candidate and ',' in candidate:
-                        line = candidate
-                        frames_this_cycle = 1
-
                 if line:
                     data = line.split(",")
                     if len(data) >= 10:
-                        try:
-                            t  = float(data[1])  # Thrust_g
-                            qp = float(data[2])  # TorquePush_Nm
-                            ql = float(data[3])  # TorquePull_Nm
-                            throttle_pwm = int(data[4])
-                            p  = float(data[5])  # Push_g
-                            l  = float(data[6])  # Pull_g
-                            v  = float(data[7])  # Volts
-                            a  = float(data[8])  # Amps
-                            r  = float(data[9])  # RPM
+                        t, qp, ql, pwm, p, l, v, a, r = map(float, data[1:10])
+                        
+                        if self.test_active and v < VOLTAGE_CUTOFF and v > 1.0:
+                            self.root.after(0, self.emergency_stop)
+                            self.root.after(0, messagebox.showwarning, "Safety", f"Voltage Drop: {v}V")
 
-                            # --- SAFETY VOLTAGE CUTOFF ---
-                            # If test is active and voltage drops below threshold
-                            if self.test_active and v < VOLTAGE_CUTOFF and v > 1.0: 
-                                # v > 1.0 ensures we don't trigger on a disconnected sensor
-                                print(f"CRITICAL: Voltage Drop Detected ({v}V). EMERGENCY STOP.")
-                                self.root.after(0, self.emergency_stop)
-                                self.root.after(0, messagebox.showwarning, 
-                                               "Safety Cutoff", f"Test stopped! Voltage dropped to {v:.2f}V")
+                        with self.latest_lock:
+                            self.latest = (t, qp, ql, r, v, a, (pwm-1000)/10.0, frames_this_cycle)
 
-                            # Store latest — thread safe
-                            with self.latest_lock:
-                                self.latest = (t, qp, ql, r, v, a, p, l,
-                                               (throttle_pwm - 1000) / 10.0,
-                                               frames_this_cycle)
+                        self.plot_thrust.append(t)
+                        self.plot_torque_push.append(qp)
+                        self.plot_torque_pull.append(ql)
+                        self.plot_throttle.append((pwm-1000)/10.0)
 
-                            # Append to plot buffers
-                            self.plot_thrust.append(t)
-                            self.plot_torque_push.append(qp)
-                            self.plot_torque_pull.append(ql)
-                            self.plot_throttle.append((throttle_pwm - 1000) / 10.0)
-
-                            if self.logging and self.logging_writer:
-                                self.logging_writer.writerow(
-                                    [datetime.now().strftime("%H:%M:%S.%f")] + data[:10])
-
-                        except (ValueError, IndexError):
-                            pass
-
-            except serial.SerialException:
-                self.ser = None
-                self.root.after(0, self.status_bar.config,
-                                {"text": "DISCONNECTED", "fg": "#e74c3c"})
+                        if self.logging and self.logging_writer:
+                            self.logging_writer.writerow([datetime.now().strftime("%H:%M:%S.%f")] + data[:10])
+            except: break
 
     def update_gui(self):
-        """
-        Called every 50ms by tkinter's after() loop.
-        Reads the latest data snapshot and updates labels + plots.
-        Decoupled from read_thread so slow rendering never causes lag.
-        """
+        if not self.running: return
         with self.latest_lock:
             snap = self.latest
-
         if snap:
-            t, qp, ql, r, v, a, p, l, throttle_pct, frames = snap
-
-            # Update labels
+            t, qp, ql, r, v, a, throt, frames = snap
             self.thrust_lbl.config(text=f"{t:.1f} g")
-            self.torque_lbl.config(text=f"Push: {qp:.4f} Nm  |  Pull: {ql:.4f} Nm")
+            self.torque_lbl.config(text=f"Push: {qp:.3f} | Pull: {ql:.3f} Nm")
             self.rpm_lbl.config(text=f"{int(r)} RPM")
             self.pwr_raw.config(text=f"{v:.2f}V | {a:.2f}A | {v*a:.1f}W")
-            self.push_raw.config(text=f"Push: {p:.2f}g")
-            self.pull_raw.config(text=f"Pull: {l:.2f}g")
+            self.latency_lbl.config(text=f"Buffer: {frames} frames", fg="#2ecc71" if frames <= 2 else "#e74c3c")
 
-            # Show how many frames were buffered (>1 means lag is building)
-            color = "#2ecc71" if frames <= 2 else "#e74c3c"
-            self.latency_lbl.config(text=f"Buffer: {frames} frames", fg=color)
-
-            # Update plots
             if len(self.plot_thrust) > 1:
                 x = range(len(self.plot_thrust))
                 self.ln_p.set_data(x, list(self.plot_throttle))
                 self.ln_f.set_data(x, list(self.plot_thrust))
                 self.ln_qp.set_data(x, list(self.plot_torque_push))
                 self.ln_ql.set_data(x, list(self.plot_torque_pull))
-
                 for ax in [self.ax_p, self.ax_f, self.ax_qp, self.ax_ql]:
-                    ax.relim()
-                    ax.autoscale_view()
-
-                for ax, buf in [(self.ax_qp, self.plot_torque_push),
-                                (self.ax_ql, self.plot_torque_pull)]:
-                    q_max = max(abs(min(buf, default=0)),
-                                abs(max(buf, default=0)), 0.001)
-                    ax.set_ylim(-q_max * 1.2, q_max * 1.2)
-
+                    ax.relim(); ax.autoscale_view()
                 self.canvas.draw_idle()
-
-        self.root.after(50, self.update_gui)  # 20Hz GUI refresh
+        self.root.after(50, self.update_gui)
 
     def update_manual_throttle(self, val):
         if self.ser and not self.test_active and not self.counting_down:
@@ -283,69 +219,61 @@ class MotorLabGUI:
     def countdown_proc(self):
         self.counting_down = True
         for i in range(5, 0, -1):
-            self.root.after(0, self.status_bar.config,
-                            {"text": f"ARMING: {i}s", "fg": "#e74c3c"})
+            if not self.running: return
+            self.root.after(0, self.status_bar.config, {"text": f"ARMING: {i}s", "fg": "#e74c3c"})
             time.sleep(1)
         self.counting_down = False
-        self.root.after(0, self.status_bar.config,
-                        {"text": "TEST ACTIVE", "fg": "#2ecc71"})
         self.run_auto_test()
 
     def run_auto_test(self):
         self.test_active = True
+        self.root.after(0, self.status_bar.config, {"text": "TEST ACTIVE", "fg": "#2ecc71"})
         fname = f"{self.file_ent.get()}_{datetime.now().strftime('%H%M%S')}.csv"
-        steps = PROGRAMS[self.prog_sel.get()]
+        
+        meta = {"Prop": self.prop_ent.get(), "Batt": self.batt_ent.get(), "Temp": self.temp_ent.get(), "Humi": self.humi_ent.get()}
+
         try:
             with open(fname, 'w', newline='') as f:
                 writer = csv.writer(f)
-                writer.writerow(["PC_Time", "ESP_ms", "Thrust_g", "TorquePush_Nm", "TorquePull_Nm",
-                                 "Throttle_PWM", "Push_g", "Pull_g", "Volts", "Amps", "RPM"])
+                writer.writerow(["# Prop", meta["Prop"], "# Batt", meta["Batt"], "# Temp", meta["Temp"], "# Humi", meta["Humi"]])
+                writer.writerow(["PC_Time", "ESP_ms", "Thrust_g", "TorquePush_Nm", "TorquePull_Nm", "Throttle_PWM", "Push_g", "Pull_g", "Volts", "Amps", "RPM"])
                 self.logging = True
                 self.logging_writer = writer
-                for thr_pct, dur in steps:
-                    if not self.test_active:
-                        break
-                    pwm = 1000 + (thr_pct * 10)
-                    if self.ser:
-                        self.ser.write(f"{pwm}\n".encode())
-                    time.sleep(dur)
-        except Exception as e:
-            print(f"Logging Error: {e}")
+                
+                for thr_pct, dur in PROGRAMS[self.prog_sel.get()]:
+                    if not self.test_active or not self.running: break
+                    if self.ser: self.ser.write(f"{1000 + (thr_pct * 10)}\n".encode())
+                    
+                    end_t = time.time() + dur
+                    while time.time() < end_t and self.test_active and self.running:
+                        time.sleep(0.1)
+        except Exception as e: print(f"Log Error: {e}")
 
         self.emergency_stop()
         self.root.after(0, self.start_btn.config, {"state": "normal"})
-        self.root.after(0, self.status_bar.config,
-                        {"text": "SYSTEM READY", "fg": "#f1c40f"})
+        self.root.after(0, self.status_bar.config, {"text": "SYSTEM READY", "fg": "#f1c40f"})
 
     def find_serial(self):
         ports = list(serial.tools.list_ports.comports())
         for p in ports:
-            desc = p.description + p.hwid
-            if any(x in desc for x in ["USB", "ESP32", "UART", "CP210", "CH340", "FTDI", "2303"]):
+            if any(x in (p.description + p.hwid) for x in ["USB", "ESP32", "UART", "CP210", "CH340", "FTDI"]):
                 try:
                     self.ser = serial.Serial(p.device, BAUD, timeout=0.1)
-                    self.ser.reset_input_buffer()  # Flush any stale data on connect
                     self.status_bar.config(text=f"CONNECTED: {p.device}", fg="#2ecc71")
                     threading.Thread(target=self.read_thread, daemon=True).start()
-                    self.root.after(100, self.update_gui)  # Start GUI update loop
+                    self.root.after(100, self.update_gui)
                     return
-                except Exception as e:
-                    print(f"Failed to open {p.device}: {e}")
-                    continue
-        self.status_bar.config(text="NO DEVICE FOUND", fg="#e74c3c")
-        self.root.after(3000, self.find_serial)  # Retry every 3s
+                except: continue
+        self.root.after(2000, self.find_serial)
 
     def send_zero(self):
-        if self.ser:
-            self.ser.write(b"Z\n")
+        if self.ser: self.ser.write(b"Z\n")
 
     def emergency_stop(self):
         self.test_active = False
         self.logging = False
-        self.logging_writer = None
         self.throt_val.set(0)
-        if self.ser:
-            self.ser.write(b"1000\n")
+        if self.ser: self.ser.write(b"1000\n")
 
 if __name__ == "__main__":
     root = tk.Tk()
@@ -353,11 +281,17 @@ if __name__ == "__main__":
     root.bind('<k>', lambda e: app.emergency_stop())
 
     def on_closing():
-        app.emergency_stop()       # Kill motor before closing
-        app.running = False        # Stop read thread
+        app.running = False
+        app.test_active = False
         if app.ser and app.ser.is_open:
-            app.ser.close()        # Release the COM port
+            try:
+                app.ser.write(b"1000\n")
+                time.sleep(0.1)
+                app.ser.close()
+            except: pass
+        root.quit()
         root.destroy()
+        os._exit(0)
 
     root.protocol("WM_DELETE_WINDOW", on_closing)
     root.mainloop()
