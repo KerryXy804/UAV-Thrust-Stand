@@ -4,8 +4,8 @@
 
 // --- CALIBRATION FACTORS ---
 const float CAL_THRUST = 73.77;
-const float CAL_PUSH   = 110;
-const float CAL_PULL   = 104.680247642;
+const float CAL_PUSH_LEFT   = 104.680247642 ;
+const float CAL_PULL_RIGHT   = 110;
 const float TORQUE_ARM_M = 0.06317685;
 const float GRAMS_TO_N   = 0.00981;
 
@@ -36,15 +36,21 @@ HX711 scaleThrust, scalePush, scalePull;
 bool inaOnline = false;
 
 // --- STATE ---
-volatile unsigned long rpmPulseCount = 0;
+volatile unsigned long lastPulseTimeMicros = 0;
+volatile unsigned long pulseIntervalMicros = 0;
+volatile bool newPulseAvailable = false;
+
 unsigned long lastStream  = 0;
-unsigned long lastRpmCalc = 0;
 float currentRpm      = 0;
 int   currentThrottle = 1000;
 
 // --- ISR ---
 void IRAM_ATTR handleRpmPulse() {
-    rpmPulseCount++;
+    unsigned long now = micros();
+    // Unsigned math naturally handles the 70-minute micros() overflow
+    pulseIntervalMicros = now - lastPulseTimeMicros; 
+    lastPulseTimeMicros = now;
+    newPulseAvailable = true;
 }
 
 // --- ESC HELPER ---
@@ -126,8 +132,8 @@ void setup() {
     scalePull.begin(PIN_LC_PULL,   PIN_HX_SCK);
     
     scaleThrust.set_scale(CAL_THRUST);
-    scalePush.set_scale(CAL_PUSH);
-    scalePull.set_scale(CAL_PULL);
+    scalePush.set_scale(CAL_PUSH_LEFT);
+    scalePull.set_scale(CAL_PULL_RIGHT);
 
     Serial.println("[2/5] Taring scales...");
     safeTare(scaleThrust, "THRUST");
@@ -149,7 +155,6 @@ void setup() {
     Serial.println("Time_ms,Thrust_g,TorquePush_Nm,TorquePull_Nm,Throttle_PWM,Push_g,Pull_g,Volts,Amps,RPM");
     
     lastStream = millis();
-    lastRpmCalc = millis();
 }
 
 void loop() {
@@ -180,16 +185,28 @@ void loop() {
     unsigned long now = millis();
     if (now - lastStream >= 20) {
         
-        // RPM calculation
-        unsigned long dur = now - lastRpmCalc;
+        // --- RPM PERIOD CALCULATION ---
+        // 1. Safely grab the volatile variables
         noInterrupts();
-        unsigned long pulses = rpmPulseCount;
-        rpmPulseCount = 0;
+        unsigned long interval = pulseIntervalMicros;
+        unsigned long lastPulse = lastPulseTimeMicros;
+        bool hasNew = newPulseAvailable;
+        newPulseAvailable = false; 
         interrupts();
-        
-        if (dur > 0) {
-            currentRpm = ((float)pulses * 60000.0) / (dur * MOTOR_POLE_PAIRS);
+
+        // 2. Calculate RPM if a new interval was recorded
+        if (hasNew && interval > 0) {
+            // 60,000,000 microseconds in a minute
+            currentRpm = 60000000.0 / (interval * MOTOR_POLE_PAIRS);
         }
+
+        // 3. Zero-RPM Timeout 
+        // If the motor stops, interrupts stop firing, and the RPM would freeze 
+        // at its last value. If no pulse is seen for 200ms (200,000 us), force to 0.
+        if (micros() - lastPulse > 200000) {
+            currentRpm = 0;
+        }
+        // ------------------------------
 
         // Torque calculation (Direct Math)
         float tPush = (abs(p) > 0.5) ? (p * GRAMS_TO_N * TORQUE_ARM_M) : 0.0f;
@@ -206,7 +223,6 @@ void loop() {
         Serial.printf("%lu,%.2f,%.4f,%.4f,%d,%.2f,%.2f,%.2f,%.3f,%.0f\n",
                       now, -t, tPush, tPull, currentThrottle, p, l, v, a, currentRpm);
         
-        lastRpmCalc = now;
         lastStream = now;
     }
 }
